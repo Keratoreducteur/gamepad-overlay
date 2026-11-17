@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DMGE Custom Xbox Controller Overlay - OBS Browser Source</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Orbitron:wght@700;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      overflow: hidden;
+      font-family: 'Rajdhani', sans-serif;
+    }
+
+    /* Optional test backdrop when previewing outside OBS */
+    body.preview-bg {
+      background: radial-gradient(circle at 50% 45%, #161b1d 0%, #090b0c 100%) !important;
+    }
+
+    .stage-wrapper {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+    }
+
+    /* Exact proportional container matching template (944 x 836 aspect ratio) */
+    .controller-rig {
+      position: relative;
+      width: min(94vw, calc(94vh * (944 / 836)));
+      aspect-ratio: 944 / 836;
+      filter: drop-shadow(0 26px 38px rgba(0, 0, 0, 0.72));
+    }
+
+    /* Layer stacking inside the exact coordinate space */
+    .layer-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      pointer-events: none;
+    }
+
+    /* WebGL GLSL Fire & Pearlescent Shader Canvas masked precisely to controller + mouth emission zone */
+    #shaderCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    /* Interactive hit-zones for testing by mouse/touch if no physical gamepad is connected */
+    .interactive-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 40;
+    }
+
+    /* Button active illumination */
+        /* Button active illumination - FIXED */
+    .btn-pressed .btn-scale {
+      transform: scale(0.85);
+      filter: brightness(1.6) drop-shadow(0 0 14px currentColor);
+    }
+
+    /* OBS Control Bar (auto-hidden in OBS Studio) */
+    .obs-hud {
+      position: fixed;
+      bottom: 14px;
+      right: 14px;
+      z-index: 100;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      background: rgba(10, 22, 20, 0.88);
+      border: 1px solid rgba(30, 232, 168, 0.42);
+      backdrop-filter: blur(8px);
+      padding: 7px 14px;
+      border-radius: 999px;
+      color: #c8efe7;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      transition: opacity 0.3s ease;
+    }
+
+    .obs-hud.hidden-in-obs {
+      display: none !important;
+    }
+
+    .hud-btn {
+      background: rgba(24, 68, 61, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: #e0f7fa;
+      padding: 4px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 11px;
+      transition: all 0.2s ease;
+    }
+
+    .hud-btn:hover {
+      background: #1f5c52;
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(41, 152, 224, 0.45);
+    }
+
+    .trigger-slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #5eead4;
+    }
+
+    .trigger-slider-wrap input[type="range"] {
+      width: 54px;
+      accent-color: #1ee8a8;
+      cursor: pointer;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+    }
+
+    .status-dot.waiting {
+      background: #38bdf8;
+      box-shadow: 0 0 8px #38bdf8;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage-wrapper">
+    <div class="controller-rig" id="controllerRig">
+
+      <!-- LAYER 1 (Z-INDEX 5): BASE CONTROLLER SILHOUETTE, PRESSURE-SENSITIVE TRIGGERS, BUMPERS & GASOLINE GREEN / NAUTICAL BLUE PEARLESCENT SHELL -->
+      <svg class="layer-svg" viewBox="0 0 944 836" xmlns="http://www.w3.org/2000/svg" id="controllerBaseSvg" style="z-index: 5;">
+        <defs>
+          <!-- GTA V Gasoline Green Base Metallic Gradient -->
+          <linearGradient id="gasolineGreenBase" x1="12%" y1="8%" x2="88%" y2="92%">
+            <stop offset="0%" stop-color="#1f5c52" />
+            <stop offset="30%" stop-color="#123832" />
+            <stop offset="58%" stop-color="#1b4f47" />
+            <stop offset="84%" stop-color="#0e352f" />
+            <stop offset="100%" stop-color="#194740" />
+          </linearGradient>
+
+          <!-- GTA V Nautical Blue Pearlescent Iridescent Overlay -->
+          <radialGradient id="nauticalBluePearl1" cx="28%" cy="22%" r="62%" fx="22%" fy="18%">
+            <stop offset="0%" stop-color="#29a2eb" stop-opacity="0.62" />
+            <stop offset="36%" stop-color="#146ba3" stop-opacity="0.36" />
+            <stop offset="72%" stop-color="#0f3952" stop-opacity="0.14" />
+            <stop offset="100%" stop-color="#0a1f24" stop-opacity="0" />
+          </radialGradient>
+
+          <radialGradient id="nauticalBluePearl2" cx="76%" cy="35%" r="58%" fx="80%" fy="28%">
+            <stop offset="0%" stop-color="#38b6ff" stop-opacity="0.56" />
+            <stop offset="42%" stop-color="#146ba3" stop-opacity="0.30" />
+            <stop offset="75%" stop-color="#11404a" stop-opacity="0.10" />
+            <stop offset="100%" stop-color="#091a1d" stop-opacity="0" />
+          </radialGradient>
+
+          <!-- Dynamic Clearcoat Specular Rim Highlight -->
+          <linearGradient id="pearlescentRim" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#53c8ff" stop-opacity="0.9" />
+            <stop offset="30%" stop-color="#1ee8a8" stop-opacity="0.65" />
+            <stop offset="65%" stop-color="#29a2eb" stop-opacity="0.8" />
+            <stop offset="100%" stop-color="#13423b" stop-opacity="0.45" />
+          </linearGradient>
+
+          <!-- Trigger & Bumper Metallic Dark Graphite + Nautical Sheen -->
+          <linearGradient id="triggerLeftGrad" x1="0%" y1="0%" x2="100%" y2="85%">
+            <stop offset="0%" stop-color="#223a3d" />
+            <stop offset="50%" stop-color="#1b2e31" />
+            <stop offset="100%" stop-color="#152628" />
+          </linearGradient>
+
+          <linearGradient id="triggerRightGrad" x1="100%" y1="0%" x2="0%" y2="85%">
+            <stop offset="0%" stop-color="#223a3d" />
+            <stop offset="50%" stop-color="#1b2e31" />
+            <stop offset="100%" stop-color="#152628" />
+          </linearGradient>
+
+          <!-- Analog Trigger Pressure Fill Gradient (Gasoline Green Liquid Energy Fill) -->
+          <linearGradient id="triggerGasolineFill" x1="0%" y1="100%" x2="0%" y2="0%">
+            <stop offset="0%" stop-color="#0e5c4a" />
+            <stop offset="35%" stop-color="#16a381" />
+            <stop offset="75%" stop-color="#1ee8a8" />
+            <stop offset="96%" stop-color="#80ffea" />
+            <stop offset="100%" stop-color="#ffffff" />
+          </linearGradient>
+
+          <linearGradient id="bumperGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#243f40" />
+            <stop offset="45%" stop-color="#132424" />
+            <stop offset="100%" stop-color="#091212" />
+          </linearGradient>
+
+          <!-- Carbon Fiber Micro-Texture Pattern for Grip & Accents -->
+          <pattern id="carbonWeave" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
+            <rect width="8" height="8" fill="#0b1514" fill-opacity="0.24" />
+            <rect x="0" y="0" width="4" height="4" fill="#29a2eb" fill-opacity="0.08" />
+            <rect x="4" y="4" width="4" height="4" fill="#1ee8a8" fill-opacity="0.08" />
+          </pattern>
+
+          <!-- Metallic Flake Sparkle Pattern -->
+          <pattern id="metallicFlake" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="4" cy="6" r="0.65" fill="#5ce1ff" fill-opacity="0.24" />
+            <circle cx="16" cy="4" r="0.55" fill="#34d399" fill-opacity="0.22" />
+            <circle cx="11" cy="15" r="0.7" fill="#38bdf8" fill-opacity="0.26" />
+            <circle cx="21" cy="19" r="0.55" fill="#2dd4bf" fill-opacity="0.2" />
+            <circle cx="6" cy="21" r="0.5" fill="#7dd3fc" fill-opacity="0.2" />
+          </pattern>
+
+          <!-- Exact Controller Body Path matching the provided template -->
+          <path id="controllerShellPath" d="
+            M 316 218
+            C 334 218, 352 232, 366 244
+            L 578 244
+            C 592 232, 610 218, 628 218
+            C 665 218, 725 252, 766 286
+            C 806 318, 848 424, 882 544
+            C 908 638, 916 714, 882 768
+            C 856 808, 814 832, 784 824
+            C 756 816, 712 764, 672 720
+            C 636 680, 614 664, 574 664
+            L 370 664
+            C 330 664, 308 680, 272 720
+            C 232 764, 188 816, 160 824
+            C 130 832, 88 808, 62 768
+            C 28 714, 36 638, 62 544
+            C 96 424, 138 318, 178 286
+            C 219 252, 279 218, 316 218 Z
+          " />
+
+          <!-- Trigger Paths & ClipPaths for Analog Pressure Filling -->
+          <path id="ltShapePath" d="M 225 184 L 236 86 C 240 52, 266 34, 298 34 C 314 34, 322 44, 322 62 L 322 170 Z" />
+          <path id="rtShapePath" d="M 719 184 L 708 86 C 704 52, 678 34, 646 34 C 630 34, 622 44, 622 62 L 622 170 Z" />
+
+          <clipPath id="ltClip">
+            <use href="#ltShapePath" />
+          </clipPath>
+          <clipPath id="rtClip">
+            <use href="#rtShapePath" />
+          </clipPath>
+
+          <clipPath id="shellClip">
+            <use href="#controllerShellPath" />
+          </clipPath>
+
+          <!-- Inner Glow for Shell Depth -->
+          <filter id="shellBevelShadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#020808" flood-opacity="0.75" />
+          </filter>
+
+          <filter id="triggerGlow" x="-25%" y="-25%" width="150%" height="150%">
+            <feGaussianBlur stdDeviation="4.5" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <!-- ==================== 1. LEFT & RIGHT TRIGGERS (LT / RT WITH ANALOG GASOLINE GREEN FILL) ==================== -->
+        <!-- Left Trigger (LT) -->
+        <g id="triggerLT">
+          <!-- Dark Housing -->
+          <use href="#ltShapePath" fill="url(#triggerLeftGrad)" stroke="#244f52" stroke-width="2" />
+          <!-- Pressure-Sensitive Gasoline Green Fill (Bottom-to-Top) -->
+          <g clip-path="url(#ltClip)">
+            <rect id="ltFillRect" x="220" y="184" width="110" height="160" fill="url(#triggerGasolineFill)" filter="url(#triggerGlow)" opacity="0.98" />
+            <!-- Bright Leading Meniscus Line -->
+            <line id="ltMeniscusLine" x1="220" y1="184" x2="330" y2="184" stroke="#ffffff" stroke-width="4" opacity="0" />
+
+          </g>
+          <!-- Sculpted Inner Shadow & Nautical Blue Specular Rim -->
+          
+          <path d="M 237 86 C 241 53, 266 35, 296 35" fill="none" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="2.2" />
+          <use id="ltOutline" href="#ltShapePath" fill="none" stroke="#2c686b" stroke-width="2" />
+        </g>
+
+        <!-- Right Trigger (RT) -->
+        <g id="triggerRT">
+          <!-- Dark Housing -->
+          <use href="#rtShapePath" fill="url(#triggerRightGrad)" stroke="#244f52" stroke-width="2" />
+          <!-- Pressure-Sensitive Gasoline Green Fill (Bottom-to-Top) -->
+          <g clip-path="url(#rtClip)">
+            <rect id="rtFillRect" x="615" y="184" width="110" height="160" fill="url(#triggerGasolineFill)" filter="url(#triggerGlow)" opacity="0.98" />
+            <!-- Bright Leading Meniscus Line -->
+            <line id="rtMeniscusLine" x1="615" y1="184" x2="725" y2="184" stroke="#ffffff" stroke-width="4" opacity="0" />
+
+          </g>
+          <!-- Sculpted Inner Shadow & Nautical Blue Specular Rim -->
+          
+          <path d="M 707 86 C 703 53, 678 35, 648 35" fill="none" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="2.2" />
+          <use id="rtOutline" href="#rtShapePath" fill="none" stroke="#2c686b" stroke-width="2" />
+        </g>
+
+        <!-- ==================== 2. LEFT & RIGHT BUMPERS (LB / RB) ==================== -->
+        <!-- Left Bumper (LB) -->
+        <g id="bumperLB" style="transition: transform 0.07s ease-out;">
+          <path d="M 176 266 C 178 238, 192 224, 224 210 C 266 192, 304 186, 326 192 C 344 198, 358 214, 368 228 L 352 246 L 182 282 Z"
+                fill="url(#bumperGrad)" stroke="#2c6975" stroke-width="1.6" />
+          <path id="lbGlowOverlay" d="M 176 266 C 178 238, 192 224, 224 210 C 266 192, 304 186, 326 192 C 344 198, 358 214, 368 228 L 352 246 L 182 282 Z"
+                fill="#1ee8a8" fill-opacity="0" />
+          <path d="M 192 236 C 228 214, 286 196, 326 202" fill="none" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="2" />
+        </g>
+
+        <!-- Right Bumper (RB) -->
+        <g id="bumperRB" style="transition: transform 0.07s ease-out;">
+          <path d="M 768 266 C 766 238, 752 224, 720 210 C 678 192, 640 186, 618 192 C 600 198, 586 214, 576 228 L 592 246 L 762 282 Z"
+                fill="url(#bumperGrad)" stroke="#2c6975" stroke-width="1.6" />
+          <path id="rbGlowOverlay" d="M 768 266 C 766 238, 752 224, 720 210 C 678 192, 640 186, 618 192 C 600 198, 586 214, 576 228 L 592 246 L 762 282 Z"
+                fill="#1ee8a8" fill-opacity="0" />
+          <path d="M 752 236 C 716 214, 658 196, 618 202" fill="none" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="2" />
+        </g>
+
+        <!-- ==================== 3. MAIN CONTROLLER BODY (GASOLINE GREEN + NAUTICAL BLUE PEARLESCENT) ==================== -->
+        <g clip-path="url(#shellClip)" filter="url(#shellBevelShadow)">
+          <!-- Base Gasoline Green Metallic Coat -->
+          <use href="#controllerShellPath" fill="url(#gasolineGreenBase)" />
+
+          <!-- Pearlescent Nautical Blue Dual-Angle Shift -->
+          <use href="#controllerShellPath" fill="url(#nauticalBluePearl1)" id="pearlShiftLayer1" />
+          <use href="#controllerShellPath" fill="url(#nauticalBluePearl2)" id="pearlShiftLayer2" />
+
+          <!-- Metallic Clearcoat Micro-Flakes -->
+          <use href="#controllerShellPath" fill="url(#metallicFlake)" />
+
+          <!-- Subtle Tactical Carbon Fiber Grip Panels on Outer Handles -->
+          <path d="M 30 460 C 85 480, 145 535, 175 630 C 195 700, 185 785, 155 830 L 30 830 Z"
+                fill="url(#carbonWeave)" stroke="#1e5c57" stroke-opacity="0.45" stroke-width="1.5" />
+          <path d="M 914 460 C 859 480, 799 535, 769 630 C 749 700, 759 785, 789 830 L 914 830 Z"
+                fill="url(#carbonWeave)" stroke="#1e5c57" stroke-opacity="0.45" stroke-width="1.5" />
+
+          <!-- Sculpted Contours & Seam Lines -->
+          <path d="M 185 284 C 228 335, 240 420, 210 525 C 185 612, 130 715, 118 815"
+                fill="none" stroke="#081716" stroke-opacity="0.65" stroke-width="2.5" />
+          <path d="M 759 284 C 716 335, 704 420, 734 525 C 759 612, 814 715, 826 815"
+                fill="none" stroke="#081716" stroke-opacity="0.65" stroke-width="2.5" />
+
+          <!-- Outer Pearlescent Rim Highlight around Entire Controller -->
+          <use href="#controllerShellPath" fill="none" stroke="url(#pearlescentRim)" stroke-width="4.5" />
+        </g>
+      </svg>
+
+            
+
+      <!-- LAYER 2 (Z-INDEX 12): ULTRA-REALISTIC GHOST RIDER FLAMING SKULL (CLIPPED TO CONTROLLER SHELL) -->
+      <svg class="layer-svg" viewBox="0 0 944 836" xmlns="http://www.w3.org/2000/svg" id="skullOverlaySvg" style="z-index: 12;">
+        <defs>
+          <clipPath id="skullControllerClip">
+            <use href="#controllerShellPath" />
+          </clipPath>
+
+          <!-- Metallic Chrome & Bone Shading Gradients -->
+          <radialGradient id="ghostSkullDome" cx="48%" cy="24%" r="76%">
+            <stop offset="0%" stop-color="#ffffff" />
+            <stop offset="25%" stop-color="#9fc8c0" />
+            <stop offset="50%" stop-color="#4a7c73" />
+            <stop offset="76%" stop-color="#193b36" />
+            <stop offset="92%" stop-color="#0a1a17" />
+            <stop offset="100%" stop-color="#020807" />
+          </radialGradient>
+
+          <!-- Ghost Rider Hellfire / Gasoline Green Core Gradient -->
+          <radialGradient id="hellfireCore" cx="50%" cy="45%" r="60%">
+            <stop offset="0%" stop-color="#ffffff" />
+            <stop offset="30%" stop-color="#80ffea" />
+            <stop offset="65%" stop-color="#1ee8a8" />
+            <stop offset="100%" stop-color="#0f3d33" stop-opacity="0" />
+          </radialGradient>
+
+          <linearGradient id="jawGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#8bb5ad" />
+            <stop offset="40%" stop-color="#416a63" />
+            <stop offset="80%" stop-color="#16302c" />
+            <stop offset="100%" stop-color="#050d0c" />
+          </linearGradient>
+
+          <linearGradient id="toothGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#ffffff" />
+            <stop offset="45%" stop-color="#c4ded8" />
+            <stop offset="90%" stop-color="#5a7d76" />
+            <stop offset="100%" stop-color="#243834" />
+          </linearGradient>
+
+          <filter id="skullShadow" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000202" flood-opacity="0.98" />
+          </filter>
+
+          <filter id="hellfireGlow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="9" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <!-- Clipped strictly inside the controller shell -->
+        <g clip-path="url(#skullControllerClip)">
+          <!-- Ghost Rider Skull centered at (472, 438) -->
+          <g id="realisticSkullGroup" transform="translate(472, 434) scale(2.66)" filter="url(#skullShadow)">
+
+            <!-- 1. DEEP ORAL CAVITY & HELLFIRE THROAT EMISSION -->
+            <path d="M -98 34 L 98 34 L 88 188 L -88 188 Z" fill="#010605" />
+            <ellipse id="throatPlasmaCore" cx="0" cy="104" rx="80" ry="84" fill="url(#hellfireCore)" opacity="0.96" filter="url(#hellfireGlow)" />
+            <ellipse cx="0" cy="104" rx="52" ry="56" fill="#010403" opacity="0.88" />
+
+            <!-- ==================== 2. ARTICULATED JAW (MANDIBLE) ==================== -->
+            <g id="skullMandible" transform="translate(0, 0)">
+              <path d="
+                M -148 18
+                L -130 120
+                C -118 176, -82 210, -48 222
+                L 48 222
+                C 82 210, 118 176, 130 120
+                L 148 18
+                L 104 36
+                L 86 114
+                L -86 114
+                L -104 36 Z
+              " fill="url(#jawGrad)" stroke="#061211" stroke-width="4.5" />
+
+              <!-- Ghost Rider Hellfire Chin Veins -->
+              <path d="M -78 152 C -38 174, 38 174, 78 152 L 56 214 L -56 214 Z"
+                    fill="#102421" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="3" />
+              <path d="M 0 154 L 0 214" stroke="#1ee8a8" stroke-width="3" filter="url(#hellfireGlow)" />
+
+              <!-- Sharp Lower Teeth -->
+              <g transform="translate(0, 88)">
+                <path d="M -90 26 L -85 -11 C -80 -17, -73 -14, -69 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M -68 26 L -63 -19 C -57 -25, -51 -19, -47 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M -45 26 L -41 -13 L -25 -13 L -23 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M -22 26 L -20 -15 L -1.5 -15 L -1.5 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 1.5 26 L 1.5 -15 L 20 -15 L 22 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 23 26 L 25 -13 L 41 -13 L 45 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 47 26 L 51 -19 C 57 -25, 63 -19, 68 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 69 26 L 73 -11 C 80 -14, 85 -17, 90 26 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+              </g>
+            </g>
+
+            <!-- ==================== 3. UPPER CRANIUM & EYE SOCKETS ==================== -->
+            <g id="skullCranium">
+              <path d="
+                M 0 -228
+                C -130 -228, -216 -152, -210 -50
+                C -207 -12, -192 14, -198 42
+                C -204 68, -168 88, -124 88
+                L -100 80
+                L -92 112
+                L 92 112
+                L 100 80
+                L 124 88
+                C 168 88, 204 68, 198 42
+                C 192 14, 207 -12, 210 -50
+                C 216 -152, 130 -228, 0 -228 Z
+              " fill="url(#ghostSkullDome)" stroke="#061211" stroke-width="5" />
+
+              <!-- Crown Crest Flame Line -->
+              <path d="M -110 -206 C -50 -230, 50 -230, 110 -206" fill="none" stroke="#80ffea" stroke-opacity="0.9" stroke-width="4" stroke-linecap="round" filter="url(#hellfireGlow)" />
+
+              <!-- Aggressive Ghost Rider Brow Ridge -->
+              <path d="M -170 -52 C -120 -86, -58 -74, -24 -36 L 0 -46 L 24 -36 C 58 -74, 120 -86, 170 -52"
+                    fill="none" stroke="#040b0a" stroke-width="12" stroke-linecap="round" />
+              <path d="M -160 -58 C -112 -90, -54 -78, -24 -40" fill="none" stroke="#ffffff" stroke-opacity="0.85" stroke-width="3.8" stroke-linecap="round" />
+              <path d="M 160 -58 C 112 -90, 54 -78, 24 -40" fill="none" stroke="#38bdf8" stroke-opacity="0.9" stroke-width="3.8" stroke-linecap="round" />
+
+              <!-- Left Eye Socket (Blazing Hellfire Eye) -->
+              <g transform="translate(-78, 0)">
+                <path d="M -66 -22 C -56 -58, 16 -56, 48 -22 C 58 8, 42 48, -6 52 C -52 52, -72 14, -66 -22 Z"
+                      fill="#010403" stroke="#16332e" stroke-width="5.5" />
+                <ellipse id="leftEyeFire" cx="-6" cy="4" rx="28" ry="20" fill="#1ee8a8" filter="url(#hellfireGlow)" />
+                <circle cx="-6" cy="4" r="12" fill="#ffffff" />
+              </g>
+
+              <!-- Right Eye Socket -->
+              <g transform="translate(78, 0)">
+                <path d="M 66 -22 C 56 -58, -16 -56, -48 -22 C -58 8, -42 48, 6 52 C 52 52, 72 14, 66 -22 Z"
+                      fill="#010403" stroke="#16332e" stroke-width="5.5" />
+                <ellipse id="rightEyeFire" cx="6" cy="4" rx="28" ry="20" fill="#1ee8a8" filter="url(#hellfireGlow)" />
+                <circle cx="6" cy="4" r="12" fill="#ffffff" />
+              </g>
+
+              <!-- Nasal Cavity -->
+              <g transform="translate(0, 36)">
+                <path d="M 0 -34 C -15 -12, -36 14, -33 36 C -30 50, -12 44, 0 36 C 12 44, 30 50, 33 36 C 36 14, 15 -12, 0 -34 Z"
+                      fill="#020605" stroke="#193834" stroke-width="5" />
+                <line x1="0" y1="-14" x2="0" y2="36" stroke="#325a55" stroke-width="5" />
+              </g>
+
+              <!-- Zygomatic Arches (Cheekbones) -->
+              <path d="M -166 50 C -128 64, -100 58, -86 44" fill="none" stroke="#38bdf8" stroke-width="6.5" stroke-linecap="round" />
+              <path d="M 166 50 C 128 64, 100 58, 86 44" fill="none" stroke="#38bdf8" stroke-width="6.5" stroke-linecap="round" />
+
+              <!-- Upper Maxilla Teeth Row -->
+              <g transform="translate(0, 106)">
+                <path d="M -90 -4 L -86 34 C -81 39, -73 36, -69 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M -70 -4 L -65 44 C -59 50, -51 44, -47 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M -45 -4 L -42 36 L -25 36 L -23 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M -22 -4 L -20 41 L -1.5 41 L -1.5 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 1.5 -4 L 1.5 41 L 20 41 L 22 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 23 -4 L 25 36 L 42 36 L 45 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 47 -4 L 51 44 C 57 50, 65 44, 70 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+                <path d="M 69 -4 L 73 34 C 80 36, 85 30, 90 -4 Z" fill="url(#toothGrad)" stroke="#0b1715" stroke-width="2" />
+              </g>
+            </g>
+          </g>
+        </g>
+      </svg>
+
+      <!-- LAYER 3 (Z-INDEX 20): REAL-TIME WEBGL GLSL FULL-CONTROLLER GASOLINE GREEN & NAUTICAL BLUE FIRE SHADER -->
+      <svg class="layer-svg" viewBox="0 0 944 836" xmlns="http://www.w3.org/2000/svg" style="z-index: 20; pointer-events: none;">
+        <defs>
+          <!-- Exact silhouette clip restricted ONLY to the main Controller Body (excluding L1/R1 bumpers & LT/RT triggers) -->
+          <clipPath id="exactFireSilhouetteClip">
+            <use href="#controllerShellPath" />
+          </clipPath>
+        </defs>
+        <foreignObject x="0" y="0" width="944" height="836" clip-path="url(#exactFireSilhouetteClip)">
+          <canvas id="shaderCanvas" width="944" height="836" style="width:944px;height:836px;display:block;"></canvas>
+        </foreignObject>
+      </svg>
+
+      <!-- LAYER 4 (Z-INDEX 30 - TOPMOST ALWAYS VISIBLE): HUGE 'DMGE' BRANDING & ALL CONTROLLER BUTTONS/STICKS -->
+      <svg class="layer-svg" viewBox="0 0 944 836" xmlns="http://www.w3.org/2000/svg" id="topControlsSvg" style="z-index: 30;">
+        <defs>
+          <!-- Bold Chrome + Gasoline Green + Nautical Blue Pearlescent DMGE Fill -->
+          <linearGradient id="dmgeTextGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#e0f7ff" />
+            <stop offset="22%" stop-color="#5eead4" />
+            <stop offset="48%" stop-color="#ffffff" />
+            <stop offset="74%" stop-color="#38bdf8" />
+            <stop offset="100%" stop-color="#6ee7b7" />
+          </linearGradient>
+
+          <linearGradient id="dmgeBorderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#1ee8a8" />
+            <stop offset="50%" stop-color="#38bdf8" />
+            <stop offset="100%" stop-color="#1ee8a8" />
+          </linearGradient>
+
+          <!-- Heavy Obsidian Halo Filter so DMGE & Buttons Stand Out 100% Clearly Inside Peak Fire -->
+          <filter id="fireContrastHalo" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#020808" flood-opacity="0.98" />
+            <feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#031210" flood-opacity="0.95" />
+          </filter>
+
+          <filter id="buttonFireIsolation" x="-25%" y="-25%" width="150%" height="150%">
+            <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#020808" flood-opacity="0.95" />
+          </filter>
+        </defs>
+
+        <!-- ==================== 1. PROMINENT LARGE 'DMGE' EMBLEM (ALWAYS VISIBLE ABOVE FIRE) ==================== -->
+        <!-- Centered in the upper-center forehead/crown zone where the old Xbox logo was removed (cx=472, cy=305) -->
+        <g id="dmgeBranding" transform="translate(472, 304)" filter="url(#fireContrastHalo)">
+          <!-- Dark Armored Tactical Shield Backing Plate -->
+          <path d="M -154 -34 L 154 -34 L 136 24 L 0 38 L -136 24 Z"
+                fill="#061211" fill-opacity="0.92" stroke="url(#dmgeBorderGrad)" stroke-width="2.8" />
+          <path d="M -144 -28 L 144 -28 L 128 19 L 0 31 L -128 19 Z"
+                fill="none" stroke="#ffffff" stroke-opacity="0.28" stroke-width="1.2" />
+
+          <!-- Massive High-Contrast DMGE Typography -->
+          <text x="0" y="15"
+                text-anchor="middle"
+                font-family="'Orbitron', sans-serif"
+                font-weight="900"
+                font-size="54"
+                letter-spacing="10"
+                fill="url(#dmgeTextGrad)"
+                stroke="#041110"
+                stroke-width="2.4"
+                paint-order="stroke fill">
+            DMGE
+          </text>
+        </g>
+
+        <!-- ==================== 2. CENTER VIEW, SHARE & MENU BUTTONS ==================== -->
+        <!-- View Button (Left) -->
+        <g id="btnView" transform="translate(415, 391)" filter="url(#buttonFireIsolation)">
+          <circle cx="0" cy="0" r="22" fill="#091313" stroke="#2dd4bf" stroke-width="2" />
+          <circle cx="0" cy="0" r="18" fill="#132222" />
+          <rect x="-7" y="-6" width="9" height="8" rx="1" fill="none" stroke="#c8ebe8" stroke-width="1.8" />
+          <path d="M -2 -2 L 7 -2 L 7 6 L -2 6 Z" fill="#132222" stroke="#c8ebe8" stroke-width="1.8" />
+        </g>
+
+        <!-- Center Status / Share Indicator Grid -->
+        <g id="btnShare" transform="translate(472, 391)" filter="url(#buttonFireIsolation)">
+          <rect x="-23" y="-21" width="46" height="42" rx="8" fill="#081212" stroke="#29a2eb" stroke-width="1.8" />
+          <rect x="-13" y="-12" width="10" height="10" rx="1.5" fill="#ffffff" filter="drop-shadow(0 0 6px #ffffff)" />
+          <rect x="3" y="-12" width="10" height="10" rx="1.5" fill="none" stroke="#9ec7c4" stroke-width="1.6" />
+          <rect x="-13" y="3" width="10" height="10" rx="1.5" fill="none" stroke="#9ec7c4" stroke-width="1.6" />
+          <rect x="3" y="3" width="10" height="10" rx="1.5" fill="none" stroke="#9ec7c4" stroke-width="1.6" />
+        </g>
+
+        <!-- Menu Button (Right) -->
+        <g id="btnMenu" transform="translate(529, 391)" filter="url(#buttonFireIsolation)">
+          <circle cx="0" cy="0" r="22" fill="#091313" stroke="#2dd4bf" stroke-width="2" />
+          <circle cx="0" cy="0" r="18" fill="#132222" />
+          <line x1="-8" y1="-5" x2="8" y2="-5" stroke="#c8ebe8" stroke-width="2.2" stroke-linecap="round" />
+          <line x1="-8" y1="0" x2="8" y2="0" stroke="#c8ebe8" stroke-width="2.2" stroke-linecap="round" />
+          <line x1="-8" y1="5" x2="8" y2="5" stroke="#c8ebe8" stroke-width="2.2" stroke-linecap="round" />
+        </g>
+
+        <!-- ==================== 3. LEFT THUMBSTICK (TOP-LEFT: cx=264, cy=391) ==================== -->
+        <g id="leftStickSocket" transform="translate(264, 391)" filter="url(#buttonFireIsolation)">
+          <circle cx="0" cy="0" r="74" fill="#081212" stroke="#1ee8a8" stroke-opacity="0.7" stroke-width="2.5" />
+          <circle cx="0" cy="0" r="69" fill="none" stroke="#38bdf8" stroke-opacity="0.45" stroke-width="1.5" />
+          <circle cx="0" cy="0" r="62" fill="#050b0b" />
+
+          <g id="leftStickCap" style="transition: transform 0.04s linear;">
+            <circle cx="0" cy="0" r="46" fill="#152020" stroke="#3c7375" stroke-width="2.2" />
+            <circle cx="0" cy="0" r="41" fill="none" stroke="#7da3a1" stroke-width="6" stroke-dasharray="2.2 2.8" />
+            <circle cx="0" cy="0" r="35" fill="#101818" stroke="#2d5457" stroke-width="1.5" />
+            <circle cx="0" cy="0" r="28" fill="#172222" />
+          </g>
+        </g>
+
+        <!-- ==================== 4. D-PAD (BOTTOM-LEFT: cx=360, cy=522) ==================== -->
+        <g id="dpadGroup" transform="translate(360, 522)" filter="url(#buttonFireIsolation)">
+          <circle cx="0" cy="0" r="64" fill="#081212" stroke="#1ee8a8" stroke-opacity="0.65" stroke-width="2.4" />
+          <circle cx="0" cy="0" r="59" fill="#050b0b" />
+
+          <g id="dpadCross">
+            <path d="M -18 -50 C -18 -53, -15 -55, -12 -55 L 12 -55 C 15 -55, 18 -53, 18 -50 L 18 -18 L 50 -18 C 53 -18, 55 -15, 55 -12 L 55 12 C 55 15, 53 18, 50 18 L 18 18 L 18 50 C 18 53, 15 55, 12 55 L -12 55 C -15 55, -18 53, -18 50 L -18 18 L -50 18 C -53 18, -55 15, -55 12 L -55 -12 C -55 -15, -53 -18, -50 -18 L -18 -18 Z"
+                  fill="#162121" stroke="#3c6e70" stroke-width="2.2" />
+            <rect id="dpadUp" x="-14" y="-51" width="28" height="31" rx="4" fill="#1ee8a8" fill-opacity="0" />
+            <rect id="dpadDown" x="-14" y="20" width="28" height="31" rx="4" fill="#1ee8a8" fill-opacity="0" />
+            <rect id="dpadLeft" x="-51" y="-14" width="31" height="28" rx="4" fill="#1ee8a8" fill-opacity="0" />
+            <rect id="dpadRight" x="20" y="-14" width="31" height="28" rx="4" fill="#1ee8a8" fill-opacity="0" />
+            <circle cx="0" cy="0" r="13" fill="#101818" stroke="#2c5052" stroke-width="1.4" />
+          </g>
+        </g>
+
+        <!-- ==================== 5. RIGHT THUMBSTICK (BOTTOM-RIGHT: cx=576, cy=522) ==================== -->
+        <g id="rightStickSocket" transform="translate(576, 522)" filter="url(#buttonFireIsolation)">
+          <circle cx="0" cy="0" r="74" fill="#081212" stroke="#1ee8a8" stroke-opacity="0.7" stroke-width="2.5" />
+          <circle cx="0" cy="0" r="69" fill="none" stroke="#38bdf8" stroke-opacity="0.45" stroke-width="1.5" />
+          <circle cx="0" cy="0" r="62" fill="#050b0b" />
+
+          <g id="rightStickCap" style="transition: transform 0.04s linear;">
+            <circle cx="0" cy="0" r="46" fill="#152020" stroke="#3c7375" stroke-width="2.2" />
+            <circle cx="0" cy="0" r="41" fill="none" stroke="#7da3a1" stroke-width="6" stroke-dasharray="2.2 2.8" />
+            <circle cx="0" cy="0" r="35" fill="#101818" stroke="#2d5457" stroke-width="1.5" />
+            <circle cx="0" cy="0" r="28" fill="#172222" />
+          </g>
+        </g>
+
+        <!-- ==================== 6. ABXY FACE BUTTONS (TOP-RIGHT - ALWAYS VISIBLE ABOVE FIRE) ==================== -->
+        <!-- Y Button (Yellow - Top: cx=680, cy=333) -->
+        <g id="btnY" transform="translate(680, 333)" style="color: #facc15;" filter="url(#buttonFireIsolation)">
+          <g class="btn-scale" style="transform-origin: center; transform-box: fill-box; transition: transform 0.06s ease;">
+            <circle cx="0" cy="0" r="29" fill="#081111" stroke="#2dd4bf" stroke-width="2.2" />
+            <circle cx="0" cy="0" r="24" fill="#141c1c" stroke="#facc15" stroke-opacity="0.55" stroke-width="1.8" />
+            <text x="0" y="10" text-anchor="middle" font-family="'Rajdhani', sans-serif" font-weight="700" font-size="32" fill="#facc15">Y</text>
+          </g>
+        </g>
+
+        <!-- X Button (Blue - Left: cx=624, cy=391) -->
+        <g id="btnX" transform="translate(624, 391)" style="color: #38bdf8;" filter="url(#buttonFireIsolation)">
+          <g class="btn-scale" style="transform-origin: center; transform-box: fill-box; transition: transform 0.06s ease;">
+            <circle cx="0" cy="0" r="29" fill="#081111" stroke="#2dd4bf" stroke-width="2.2" />
+            <circle cx="0" cy="0" r="24" fill="#141c1c" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="1.8" />
+            <text x="0" y="10" text-anchor="middle" font-family="'Rajdhani', sans-serif" font-weight="700" font-size="32" fill="#38bdf8">X</text>
+          </g>
+        </g>
+
+        <!-- B Button (Red - Right: cx=736, cy=391) -->
+        <g id="btnB" transform="translate(736, 391)" style="color: #f87171;" filter="url(#buttonFireIsolation)">
+          <g class="btn-scale" style="transform-origin: center; transform-box: fill-box; transition: transform 0.06s ease;">
+            <circle cx="0" cy="0" r="29" fill="#081111" stroke="#2dd4bf" stroke-width="2.2" />
+            <circle cx="0" cy="0" r="24" fill="#141c1c" stroke="#f87171" stroke-opacity="0.55" stroke-width="1.8" />
+            <text x="0" y="10" text-anchor="middle" font-family="'Rajdhani', sans-serif" font-weight="700" font-size="32" fill="#ef4444">B</text>
+          </g>
+        </g>
+
+        <!-- A Button (Green - Bottom: cx=680, cy=448) -->
+        <g id="btnA" transform="translate(680, 448)" style="color: #4ade80;" filter="url(#buttonFireIsolation)">
+          <g class="btn-scale" style="transform-origin: center; transform-box: fill-box; transition: transform 0.06s ease;">
+            <circle cx="0" cy="0" r="29" fill="#081111" stroke="#2dd4bf" stroke-width="2.2" />
+            <circle cx="0" cy="0" r="24" fill="#141c1c" stroke="#4ade80" stroke-opacity="0.55" stroke-width="1.8" />
+            <text x="0" y="10" text-anchor="middle" font-family="'Rajdhani', sans-serif" font-weight="700" font-size="32" fill="#22c55e">A</text>
+          </g>
+        </g>
+      </svg>
+
+      <!-- LAYER 5 (Z-INDEX 40): INTERACTIVE CLICK/TOUCH ZONES FOR TESTING BUTTONS & TRIGGERS WITHOUT GAMEPAD -->
+      <svg class="interactive-layer" viewBox="0 0 944 836" xmlns="http://www.w3.org/2000/svg">
+        <use href="#ltShapePath" fill="transparent" class="cursor-pointer" id="ltHitZone" title="LT Basış Testi" />
+        <use href="#rtShapePath" fill="transparent" class="cursor-pointer" id="rtHitZone" title="RT Basış Testi" />
+        <path d="M 176 266 C 178 238, 192 224, 224 210 C 266 192, 304 186, 326 192 C 344 198, 358 214, 368 228 L 352 246 L 182 282 Z" fill="transparent" class="cursor-pointer" data-test-btn="LB" title="L1 / LB Basış Testi" />
+        <path d="M 768 266 C 766 238, 752 224, 720 210 C 678 192, 640 186, 618 192 C 600 198, 586 214, 576 228 L 592 246 L 762 282 Z" fill="transparent" class="cursor-pointer" data-test-btn="RB" title="R1 / RB Basış Testi" />
+        <circle cx="680" cy="333" r="30" fill="transparent" class="cursor-pointer" data-test-btn="Y" />
+        <circle cx="624" cy="391" r="30" fill="transparent" class="cursor-pointer" data-test-btn="X" />
+        <circle cx="736" cy="391" r="30" fill="transparent" class="cursor-pointer" data-test-btn="B" />
+        <circle cx="680" cy="448" r="30" fill="transparent" class="cursor-pointer" data-test-btn="A" />
+        <circle cx="472" cy="480" r="110" fill="transparent" class="cursor-pointer" id="skullTriggerZone" title="Kükreme Döngüsünü Tetikle" />
+      </svg>
+
+    </div>
+  </div>
+
+  <!-- OBS / Browser Control HUD (Automatically hidden when inside OBS Studio or ?obs=1) -->
+  <div class="obs-hud" id="obsHud">
+    <span class="status-dot waiting" id="gpDot"></span>
+    <span id="gpStatusText">Gamepad Bekleniyor</span>
+    <div class="trigger-slider-wrap" title="Sol Tetik (LT) Hassasiyet Testi">
+      <span>LT</span>
+      <input type="range" id="ltTestSlider" min="0" max="100" value="0" />
+    </div>
+    <div class="trigger-slider-wrap" title="Sağ Tetik (RT) Hassasiyet Testi">
+      <span>RT</span>
+      <input type="range" id="rtTestSlider" min="0" max="100" value="0" />
+    </div>
+    <button class="hud-btn" id="toggleBgBtn" title="Önizleme Arka Planını Aç/Kapat">Arka Plan: Şeffaf</button>
+    <button class="hud-btn" id="triggerRoarBtn" title="Kuru Kafa Ateş Döngüsünü Tetikle">Ateş Püskürt</button>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const isOBS = Boolean(window.obsstudio) || urlParams.get('obs') === '1';
+      const obsHud = document.getElementById('obsHud');
+      const toggleBgBtn = document.getElementById('toggleBgBtn');
+
+      if (isOBS) {
+        obsHud.classList.add('hidden-in-obs');
+        document.body.classList.remove('preview-bg');
+      } else {
+        let bgOn = urlParams.get('preview') === '1';
+        if (bgOn) {
+          document.body.classList.add('preview-bg');
+          toggleBgBtn.textContent = 'Arka Plan: Koyu';
+        }
+        toggleBgBtn.addEventListener('click', () => {
+          bgOn = !bgOn;
+          document.body.classList.toggle('preview-bg', bgOn);
+          toggleBgBtn.textContent = bgOn ? 'Arka Plan: Koyu' : 'Arka Plan: Şeffaf';
+        });
+      }
+
+      // Skull Animation Elements
+      const skullMandible = document.getElementById('skullMandible');
+      const skullCranium = document.getElementById('skullCranium');
+      const realisticSkullGroup = document.getElementById('realisticSkullGroup');
+      const throatPlasmaCore = document.getElementById('throatPlasmaCore');
+      const leftEyeFire = document.getElementById('leftEyeFire');
+      const rightEyeFire = document.getElementById('rightEyeFire');
+
+      let jawOpenAmount = 0.0;
+      let fireIntensity = 0.18;
+      let manualFireActive = false;
+      let shakeX = 0;
+      let shakeY = 0;
+
+      // Make manual fire trigger when clicking the skull or test button
+      const skullTriggerZone = document.getElementById('skullTriggerZone');
+      if (skullTriggerZone) {
+        skullTriggerZone.addEventListener('pointerdown', () => { manualFireActive = true; });
+        skullTriggerZone.addEventListener('pointerup', () => { manualFireActive = false; });
+        skullTriggerZone.addEventListener('pointerleave', () => { manualFireActive = false; });
+      }
+
+      function updateSkullAnimation(dt, elapsed, isFiring) {
+        let targetJaw = isFiring ? 1.0 : 0.0;
+        let targetFire = isFiring ? 1.25 : 0.16;
+        shakeX = 0;
+        shakeY = 0;
+
+        if (isFiring) {
+          targetJaw = 1.0 + 0.05 * Math.sin(elapsed * 26.0);
+          targetFire = 1.2 + 0.18 * Math.sin(elapsed * 19.0);
+          shakeX = Math.sin(elapsed * 43.0) * 1.15;
+          shakeY = Math.cos(elapsed * 37.0) * 0.95;
+        }
+
+        const interpSpeed = isFiring ? 16.0 : 12.0;
+        jawOpenAmount += (targetJaw - jawOpenAmount) * Math.min(1, dt * interpSpeed);
+        fireIntensity += (targetFire - fireIntensity) * Math.min(1, dt * interpSpeed);
+
+        const jawDropPx = jawOpenAmount * 52.0;
+        const jawTiltDeg = Math.sin(elapsed * 14.0) * 1.4 * jawOpenAmount;
+        skullMandible.setAttribute('transform', `translate(0, ${jawDropPx.toFixed(2)}) rotate(${jawTiltDeg.toFixed(2)})`);
+
+        const craniumLift = -jawOpenAmount * 5.0;
+        skullCranium.setAttribute('transform', `translate(0, ${craniumLift.toFixed(2)})`);
+
+        realisticSkullGroup.setAttribute(
+          'transform',
+          `translate(${(472 + shakeX * 2.2).toFixed(2)}, ${(434 + shakeY * 1.9).toFixed(2)}) scale(2.66)`
+        );
+
+        const eyeScale = 0.88 + fireIntensity * 0.48;
+        leftEyeFire.setAttribute('rx', (21.0 * eyeScale).toFixed(2));
+        leftEyeFire.setAttribute('ry', (16.0 * eyeScale).toFixed(2));
+        rightEyeFire.setAttribute('rx', (21.0 * eyeScale).toFixed(2));
+        rightEyeFire.setAttribute('ry', (16.0 * eyeScale).toFixed(2));
+        throatPlasmaCore.setAttribute('opacity', Math.min(1, 0.25 + fireIntensity * 0.75).toFixed(2));
+      }
+
+      // WebGL Shader setup
+      const canvas = document.getElementById('shaderCanvas');
+      const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: true });
+
+      let shaderProgram = null;
+      let uTimeLoc, uFireIntensityLoc, uJawOpenLoc, uResolutionLoc;
+
+      if (gl) {
+        const vertSource = `
+          attribute vec2 aPos;
+          varying vec2 vUv;
+          void main() {
+            vUv = aPos * 0.5 + 0.5;
+            gl_Position = vec4(aPos, 0.0, 1.0);
+          }
+        `;
+        const fragSource = `
+          precision highp float;
+          varying vec2 vUv;
+          uniform float uTime;
+          uniform float uFireIntensity;
+          uniform float uJawOpen;
+          uniform vec2 uResolution;
+          uniform vec2 uLeftEye;
+          uniform vec2 uRightEye;
+
+          float hash(vec2 p) {
+            p = fract(p * vec2(123.34, 456.21));
+            p += dot(p, p + 45.32);
+            return fract(p.x * p.y);
+          }
+          float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash(i);
+            float b = hash(i + vec2(1.0, 0.0));
+            float c = hash(i + vec2(0.0, 1.0));
+            float d = hash(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+          }
+          float fbm(vec2 p) {
+            float v = 0.0;
+            float amp = 0.5;
+            mat2 rot = mat2(0.80, -0.60, 0.60, 0.80);
+            for (int i = 0; i < 5; i++) {
+              v += amp * noise(p);
+              p = rot * p * 2.04 + vec2(0.0, -uTime * 1.65);
+              amp *= 0.5;
+            }
+            return v;
+          }
+          vec4 computeFlame(vec2 uv, vec2 origin, vec2 scale, float speed, float intensity, float spread) {
+            vec2 p = (uv - origin) / scale;
+            p.x /= (1.0 + max(0.0, p.y) * spread);
+            vec2 flowUv = vec2(p.x * 2.3, p.y * 2.0 - uTime * speed);
+            float n1 = fbm(flowUv);
+            float n2 = fbm(flowUv * 1.85 + vec2(3.1, -uTime * speed * 1.35));
+            float turb = mix(n1, n2, 0.55);
+            float distX = abs(p.x + (turb - 0.5) * 0.80 * clamp(p.y + 0.45, 0.0, 1.8));
+            float verticalFade = smoothstep(-0.38, 0.06, p.y) * (1.0 - smoothstep(0.35, 1.45 * intensity + 0.35, p.y));
+            float shape = (1.0 - smoothstep(0.12, 0.78, distX)) * verticalFade;
+            float heat = clamp(shape * (0.76 + turb * 0.96) * intensity, 0.0, 1.45);
+
+            vec3 colDeepGasoline = vec3(0.06, 0.30, 0.25);
+            vec3 colGasoline     = vec3(0.12, 0.88, 0.65);
+            vec3 colNauticalBlue = vec3(0.16, 0.64, 0.92);
+            vec3 colHotCore      = vec3(0.84, 1.00, 0.95);
+
+            vec3 flameCol = mix(colDeepGasoline, colGasoline, smoothstep(0.08, 0.48, heat));
+            float blueEdge = smoothstep(0.14, 0.48, heat) * (1.0 - smoothstep(0.55, 0.95, heat));
+            flameCol = mix(flameCol, colNauticalBlue, blueEdge * 0.68);
+            flameCol = mix(flameCol, colHotCore, smoothstep(0.80, 1.28, heat));
+
+            float alpha = smoothstep(0.04, 0.44, heat);
+            return vec4(flameCol * alpha, alpha);
+          }
+          void main() {
+            vec2 fireUv = vUv;
+            vec2 svgPos = vec2(vUv.x * 944.0, (1.0 - vUv.y) * 836.0);
+            float x = svgPos.x;
+            float y = svgPos.y;
+            float dx = abs(x - 472.0);
+
+            float crestWave = sin(x * 0.07 + uTime * 5.4) * 5.2 + cos(x * 0.13 - uTime * 7.2) * 3.0;
+            float triggerCeilingY = 34.0 + max(0.0, crestWave + 4.2);
+            float topTriggerWaveCap = smoothstep(triggerCeilingY, triggerCeilingY + 24.0, y);
+
+            // Tuşlara ve ateşe basıldığında alevler L1/R1 omuz tuşlarının en üst seviyesine kadar dalgalanarak yükselir
+            float reach = 0.55 + uFireIntensity * 0.55;
+            vec4 mouthFlame = computeFlame(fireUv, vec2(0.5, 0.28 - uJawOpen * 0.02), vec2(0.48 + uJawOpen * 0.15, 0.5 + reach * 0.5), 3.6, uFireIntensity * 1.4, 1.4);
+            vec4 leftShoulderFlame = computeFlame(fireUv, vec2(0.26, 0.22), vec2(0.28 + uJawOpen * 0.06, 0.6 + reach * 0.55), 3.4, uFireIntensity * 1.3, 1.0);
+            vec4 rightShoulderFlame = computeFlame(fireUv, vec2(0.74, 0.22), vec2(0.28 + uJawOpen * 0.06, 0.6 + reach * 0.55), 3.5, uFireIntensity * 1.3, 1.0);
+            vec4 leftGripFlame = computeFlame(fireUv, vec2(0.14, 0.01), vec2(0.25 + uJawOpen * 0.05, 0.55 + reach * 0.45), 3.1, uFireIntensity * 1.2, 0.95);
+            vec4 rightGripFlame = computeFlame(fireUv, vec2(0.86, 0.01), vec2(0.25 + uJawOpen * 0.05, 0.55 + reach * 0.45), 3.2, uFireIntensity * 1.2, 0.95);
+            vec4 leftEyeFlame = computeFlame(fireUv, uLeftEye, vec2(0.16, 0.28 + uFireIntensity * 0.15), 5.0, 1.65 + uFireIntensity * 1.25, 0.80);
+            vec4 rightEyeFlame = computeFlame(fireUv, uRightEye, vec2(0.16, 0.28 + uFireIntensity * 0.15), 4.9, 1.65 + uFireIntensity * 1.25, 0.80);
+
+            float bedNoise = fbm(vec2(fireUv.x * 5.5, fireUv.y * 4.5 - uTime * 2.2));
+            vec3 bedCol = mix(vec3(0.07, 0.36, 0.30), vec3(0.14, 0.72, 0.85), bedNoise);
+            float bedAlpha = (0.28 + 0.34 * bedNoise) * (0.45 + 0.55 * uFireIntensity);
+            vec4 plasmaBed = vec4(bedCol * bedAlpha, bedAlpha);
+
+            // Maksimum belirginlikte, yüksek kontrastlı ve keskin nokta nokta yükselen köz tanecikleri
+            float pressBoost = smoothstep(0.20, 0.85, uFireIntensity);
+            float embers = 0.0;
+            vec3 emberColorAcc = vec3(0.0);
+            for (float i = 1.0; i <= 90.0; i++) {
+               float seed1 = hash(vec2(i * 1.13, 3.71));
+               float seed2 = hash(vec2(i * 2.41, 7.19));
+               float seed3 = hash(vec2(i * 4.07, 1.53));
+               
+               float speed = (0.45 + seed1 * 0.65) * (0.75 + pressBoost * 1.65);
+               float life = fract(uTime * speed + seed2);
+               
+               // Kontrolcü altından ve ortasından tüm gövdeye dağılarak yukarı uçuşan nokta közler
+               float startX = 0.08 + seed3 * 0.84;
+               float sway = sin(uTime * (2.8 + seed1 * 3.8) + i * 1.7) * (0.045 + life * 0.08);
+               vec2 emberPos = vec2(startX + sway, life * 0.98);
+               
+               // Aspect ratio düzeltmesi (tam yuvarlak nokta közler için)
+               vec2 diff = (fireUv - emberPos) * vec2(944.0 / 836.0, 1.0);
+               float dist = length(diff);
+               
+               // Basıldığında çok daha iri, net ve belirgin köz noktaları
+               float baseRadius = mix(0.0055, 0.0165, seed2) * (0.75 + pressBoost * 1.25);
+               // Keskin, dolu akkor çekirdek + parlak dış hale
+               float coreDot = 1.0 - smoothstep(baseRadius * 0.45, baseRadius * 1.05, dist);
+               float haloDot = (1.0 - smoothstep(baseRadius * 0.8, baseRadius * 3.0, dist)) * 0.75;
+               
+               // Titreşimli köz parlaması (flicker)
+               float flicker = 0.80 + 0.20 * sin(uTime * (14.0 + seed1 * 20.0) + i * 3.1);
+               float fadeLife = smoothstep(0.0, 0.08, life) * (1.0 - smoothstep(0.80, 1.0, life));
+               
+               float spark = (coreDot * 2.4 + haloDot * 1.2) * flicker * fadeLife * (0.45 + pressBoost * 4.2);
+               embers += spark;
+               
+               // Yüksek kontrastlı renk paleti: saf beyaz akkor çekirdek + canlı Gasoline Green (#1ee8a8) / Nautical Blue (#38bdf8) hale
+               vec3 cGasoline = vec3(0.15, 1.00, 0.72);
+               vec3 cNautical = vec3(0.28, 0.82, 1.00);
+               vec3 cHotWhite = vec3(1.00, 1.00, 1.00);
+               
+               vec3 dotCol = mix(cGasoline, cNautical, step(0.45, seed1));
+               dotCol = mix(dotCol, cHotWhite, clamp(coreDot * (0.65 + pressBoost * 0.85), 0.0, 1.0));
+               
+               emberColorAcc += dotCol * spark;
+            }
+            vec4 emberLayer = vec4(clamp(emberColorAcc * (1.4 + pressBoost * 2.2), 0.0, 1.0), clamp(embers * (0.65 + pressBoost * 1.25), 0.0, 1.0));
+
+            vec4 finalColor = plasmaBed;
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - mouthFlame);
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - leftShoulderFlame * 0.92);
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - rightShoulderFlame * 0.92);
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - leftGripFlame * 0.92);
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - rightGripFlame * 0.92);
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - leftEyeFlame);
+            finalColor = 1.0 - (1.0 - finalColor) * (1.0 - rightEyeFlame);
+            finalColor = clamp(finalColor + emberLayer * (0.55 + pressBoost * 0.95), 0.0, 1.0);
+
+            float inTriggerZone = (1.0 - smoothstep(174.0, 194.0, y)) * smoothstep(140.0, 155.0, dx);
+            float triggerTransparency = mix(0.94, 0.26, inTriggerZone);
+            finalColor *= topTriggerWaveCap * triggerTransparency;
+
+            gl_FragColor = clamp(finalColor, 0.0, 1.0);
+          }
+        `;
+
+        function compileShader(type, source) {
+          const s = gl.createShader(type);
+          gl.shaderSource(s, source);
+          gl.compileShader(s);
+          return s;
+        }
+
+        const vs = compileShader(gl.VERTEX_SHADER, vertSource);
+        const fs = compileShader(gl.FRAGMENT_SHADER, fragSource);
+        if (vs && fs) {
+          shaderProgram = gl.createProgram();
+          gl.attachShader(shaderProgram, vs);
+          gl.attachShader(shaderProgram, fs);
+          gl.linkProgram(shaderProgram);
+          if (gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            gl.useProgram(shaderProgram);
+            const buf = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+            const aPos = gl.getAttribLocation(shaderProgram, 'aPos');
+            gl.enableVertexAttribArray(aPos);
+            gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+            uTimeLoc = gl.getUniformLocation(shaderProgram, 'uTime');
+            uFireIntensityLoc = gl.getUniformLocation(shaderProgram, 'uFireIntensity');
+            uJawOpenLoc = gl.getUniformLocation(shaderProgram, 'uJawOpen');
+            uResolutionLoc = gl.getUniformLocation(shaderProgram, 'uResolution');
+            window.uLeftEyeLoc = gl.getUniformLocation(shaderProgram, 'uLeftEye');
+            window.uRightEyeLoc = gl.getUniformLocation(shaderProgram, 'uRightEye');
+          }
+        }
+      }
+
+      const pearlShiftLayer1 = document.getElementById('pearlShiftLayer1');
+      const pearlShiftLayer2 = document.getElementById('pearlShiftLayer2');
+      function updatePearlescentSheen(elapsed) {
+        if (pearlShiftLayer1 && pearlShiftLayer2) {
+          pearlShiftLayer1.setAttribute('opacity', (0.78 + 0.22 * Math.sin(elapsed * 0.9)).toFixed(3));
+          pearlShiftLayer2.setAttribute('opacity', (0.75 + 0.25 * Math.cos(elapsed * 0.75 + 1.1)).toFixed(3));
+        }
+      }
+
+      // Gamepad & Test Buttons
+      const gpDot = document.getElementById('gpDot');
+      const gpStatusText = document.getElementById('gpStatusText');
+      const btnA = document.getElementById('btnA');
+      const btnB = document.getElementById('btnB');
+      const btnX = document.getElementById('btnX');
+      const btnY = document.getElementById('btnY');
+      const bumperLB = document.getElementById('bumperLB');
+      const bumperRB = document.getElementById('bumperRB');
+      const triggerLT = document.getElementById('triggerLT');
+      const triggerRT = document.getElementById('triggerRT');
+      const btnView = document.getElementById('btnView');
+      const btnMenu = document.getElementById('btnMenu');
+      const leftStickCap = document.getElementById('leftStickCap');
+      const rightStickCap = document.getElementById('rightStickCap');
+      const dpadUp = document.getElementById('dpadUp');
+      const dpadDown = document.getElementById('dpadDown');
+      const dpadLeft = document.getElementById('dpadLeft');
+      const dpadRight = document.getElementById('dpadRight');
+
+      const ltFillRect = document.getElementById('ltFillRect');
+      const rtFillRect = document.getElementById('rtFillRect');
+      const ltMeniscusLine = document.getElementById('ltMeniscusLine');
+      const rtMeniscusLine = document.getElementById('rtMeniscusLine');
+      const ltOutline = document.getElementById('ltOutline');
+      const rtOutline = document.getElementById('rtOutline');
+      const lbGlowOverlay = document.getElementById('lbGlowOverlay');
+      const rbGlowOverlay = document.getElementById('rbGlowOverlay');
+
+      const manualButtons = { A: false, B: false, X: false, Y: false, LB: false, RB: false };
+      let manualLT = 0, manualRT = 0;
+      let ltMouseHeld = false, rtMouseHeld = false;
+
+      const ltTestSlider = document.getElementById('ltTestSlider');
+      const rtTestSlider = document.getElementById('rtTestSlider');
+      if (ltTestSlider) ltTestSlider.addEventListener('input', (e) => { manualLT = parseFloat(e.target.value) / 100; });
+      if (rtTestSlider) rtTestSlider.addEventListener('input', (e) => { manualRT = parseFloat(e.target.value) / 100; });
+
+      const ltHitZone = document.getElementById('ltHitZone');
+      const rtHitZone = document.getElementById('rtHitZone');
+      if (ltHitZone) ltHitZone.addEventListener('pointerdown', () => { ltMouseHeld = true; });
+      window.addEventListener('pointerup', () => { ltMouseHeld = false; rtMouseHeld = false; });
+      if (rtHitZone) rtHitZone.addEventListener('pointerdown', () => { rtMouseHeld = true; });
+
+      // Interactive on-screen testing bindings for A, B, X, Y
+      document.querySelectorAll('[data-test-btn]').forEach((el) => {
+        const key = el.getAttribute('data-test-btn');
+        const press = () => { manualButtons[key] = true; };
+        const release = () => { manualButtons[key] = false; };
+        el.addEventListener('pointerdown', press);
+        el.addEventListener('pointerup', release);
+        el.addEventListener('pointerleave', release);
+      });
+
+      window.addEventListener('gamepadconnected', (e) => {
+        if (gpDot) gpDot.classList.remove('waiting');
+        if (gpStatusText) gpStatusText.textContent = `Bağlı: ${e.gamepad.id.slice(0, 20)}`;
+      });
+      window.addEventListener('gamepaddisconnected', () => {
+        if (gpDot) gpDot.classList.add('waiting');
+        if (gpStatusText) gpStatusText.textContent = 'Gamepad Bekleniyor';
+      });
+
+      function setFaceButtonState(el, pressed) {
+        if (!el) return;
+        if (pressed) {
+          el.classList.add('btn-pressed');
+        } else {
+          el.classList.remove('btn-pressed');
+        }
+      }
+
+      function pollGamepad(dt) {
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        let gp = null;
+        for (let i = 0; i < gamepads.length; i++) {
+          if (gamepads[i]) { gp = gamepads[i]; break; }
+        }
+
+        const isA = manualButtons.A || (gp && gp.buttons[0]?.pressed);
+        const isB = manualButtons.B || (gp && gp.buttons[1]?.pressed);
+        const isX = manualButtons.X || (gp && gp.buttons[2]?.pressed);
+        const isY = manualButtons.Y || (gp && gp.buttons[3]?.pressed);
+        const isLB = manualButtons.LB || (gp && gp.buttons[4]?.pressed);
+        const isRB = manualButtons.RB || (gp && gp.buttons[5]?.pressed);
+        
+        const gpLTVal = gp ? (gp.buttons[6]?.value || 0) : 0;
+        const gpRTVal = gp ? (gp.buttons[7]?.value || 0) : 0;
+        const isLTActive = manualLT > 0.15 || gpLTVal > 0.15;
+        const isRTActive = manualRT > 0.15 || gpRTVal > 0.15;
+
+        setFaceButtonState(btnA, isA);
+        setFaceButtonState(btnB, isB);
+        setFaceButtonState(btnX, isX);
+        setFaceButtonState(btnY, isY);
+
+        if (bumperLB) {
+          bumperLB.setAttribute('transform', isLB ? 'translate(0, 5)' : 'translate(0, 0)');
+          if (lbGlowOverlay) lbGlowOverlay.setAttribute('fill-opacity', isLB ? '0.45' : '0');
+        }
+        if (bumperRB) {
+          bumperRB.setAttribute('transform', isRB ? 'translate(0, 5)' : 'translate(0, 0)');
+          if (rbGlowOverlay) rbGlowOverlay.setAttribute('fill-opacity', isRB ? '0.45' : '0');
+        }
+
+        if (gp) {
+          if (btnView) btnView.setAttribute('transform', `translate(415, 391) scale(${gp.buttons[8]?.pressed ? 0.9 : 1})`);
+          if (btnMenu) btnMenu.setAttribute('transform', `translate(529, 391) scale(${gp.buttons[9]?.pressed ? 0.9 : 1})`);
+
+          if (dpadUp) dpadUp.setAttribute('fill-opacity', gp.buttons[12]?.pressed ? '0.75' : '0');
+          if (dpadDown) dpadDown.setAttribute('fill-opacity', gp.buttons[13]?.pressed ? '0.75' : '0');
+          if (dpadLeft) dpadLeft.setAttribute('fill-opacity', gp.buttons[14]?.pressed ? '0.75' : '0');
+          if (dpadRight) dpadRight.setAttribute('fill-opacity', gp.buttons[15]?.pressed ? '0.75' : '0');
+
+          const deadzone = 0.08;
+          const lx = Math.abs(gp.axes[0] || 0) > deadzone ? gp.axes[0] : 0;
+          const ly = Math.abs(gp.axes[1] || 0) > deadzone ? gp.axes[1] : 0;
+          const rx = Math.abs(gp.axes[2] || 0) > deadzone ? gp.axes[2] : 0;
+          const ry = Math.abs(gp.axes[3] || 0) > deadzone ? gp.axes[3] : 0;
+
+          if (leftStickCap) leftStickCap.setAttribute('transform', `translate(${(lx * 18).toFixed(1)}, ${(ly * 18).toFixed(1)})`);
+          if (rightStickCap) rightStickCap.setAttribute('transform', `translate(${(rx * 18).toFixed(1)}, ${(ry * 18).toFixed(1)})`);
+        }
+
+
+        // Update LT/RT Visual Bar Fill
+        const finalLTVal = Math.max(manualLT, gpLTVal);
+        const finalRTVal = Math.max(manualRT, gpRTVal);
+
+        if (ltFillRect && ltMeniscusLine && ltOutline) {
+          const fillH = finalLTVal * 160;
+          ltFillRect.setAttribute('y', (184 - fillH).toFixed(1));
+          ltFillRect.setAttribute('height', (fillH + 10).toFixed(1));
+          ltMeniscusLine.setAttribute('y1', (184 - fillH).toFixed(1));
+          ltMeniscusLine.setAttribute('y2', (184 - fillH).toFixed(1));
+          ltMeniscusLine.setAttribute('opacity', finalLTVal > 0.05 ? '1' : '0');
+        }
+
+        if (rtFillRect && rtMeniscusLine && rtOutline) {
+          const fillH = finalRTVal * 160;
+          rtFillRect.setAttribute('y', (184 - fillH).toFixed(1));
+          rtFillRect.setAttribute('height', (fillH + 10).toFixed(1));
+          rtMeniscusLine.setAttribute('y1', (184 - fillH).toFixed(1));
+          rtMeniscusLine.setAttribute('y2', (184 - fillH).toFixed(1));
+          rtMeniscusLine.setAttribute('opacity', finalRTVal > 0.05 ? '1' : '0');
+        }
+
+        return { isA, isX, isLB, isRB, isLTActive, isRTActive };
+      }
+
+      let lastTime = performance.now();
+      const startTime = lastTime;
+
+      function animate(now) {
+        const dt = Math.min(0.05, (now - lastTime) / 1000);
+        const elapsed = (now - startTime) / 1000;
+        lastTime = now;
+
+        const gpState = pollGamepad(dt);
+        const isFiring = gpState.isA || gpState.isLB || gpState.isRB || manualFireActive;
+
+        updateSkullAnimation(dt, elapsed, isFiring);
+        updatePearlescentSheen(elapsed);
+
+        if (gl && shaderProgram) {
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.clearColor(0, 0, 0, 0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          gl.uniform1f(uTimeLoc, elapsed);
+          gl.uniform1f(uFireIntensityLoc, fireIntensity);
+          gl.uniform1f(uJawOpenLoc, jawOpenAmount);
+          gl.uniform2f(uResolutionLoc, canvas.width, canvas.height);
+
+          let skullX = 472 + shakeX * 2.2;
+          let skullY = 434 + shakeY * 1.9;
+          let skullScale = 2.66;
+
+          let lEyeSvgX = skullX + (-78) * skullScale;
+          let lEyeSvgY = skullY + (0) * skullScale;
+          let rEyeSvgX = skullX + (78) * skullScale;
+          let rEyeSvgY = skullY + (0) * skullScale;
+
+          gl.uniform2f(window.uLeftEyeLoc, lEyeSvgX / 944.0, 1.0 - (lEyeSvgY / 836.0));
+          gl.uniform2f(window.uRightEyeLoc, rEyeSvgX / 944.0, 1.0 - (rEyeSvgY / 836.0));
+
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+        }
+
+        requestAnimationFrame(animate);
+      }
+
+      const triggerRoarBtn = document.getElementById('triggerRoarBtn');
+      if (triggerRoarBtn) {
+        triggerRoarBtn.addEventListener('pointerdown', () => { manualFireActive = true; });
+        triggerRoarBtn.addEventListener('pointerup', () => { manualFireActive = false; });
+        triggerRoarBtn.addEventListener('pointerleave', () => { manualFireActive = false; });
+      }
+
+      window.onload = function () {
+        requestAnimationFrame(animate);
+      };
+    })();
+  </script>
+</body>
+</html>
